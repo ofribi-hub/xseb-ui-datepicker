@@ -51,17 +51,10 @@ function getDaysInGrid(year: number, month: number): Date[] {
   const first = new Date(year, month, 1);
   const last = new Date(year, month + 1, 0);
   const days: Date[] = [];
-
-  for (let i = first.getDay(); i > 0; i--) {
-    days.push(new Date(year, month, 1 - i));
-  }
-  for (let d = 1; d <= last.getDate(); d++) {
-    days.push(new Date(year, month, d));
-  }
+  for (let i = first.getDay(); i > 0; i--) days.push(new Date(year, month, 1 - i));
+  for (let d = 1; d <= last.getDate(); d++) days.push(new Date(year, month, d));
   const remaining = 42 - days.length;
-  for (let d = 1; d <= remaining; d++) {
-    days.push(new Date(year, month + 1, d));
-  }
+  for (let d = 1; d <= remaining; d++) days.push(new Date(year, month + 1, d));
   return days;
 }
 
@@ -107,7 +100,6 @@ function useYearListPosition(
   open: boolean
 ): React.CSSProperties {
   const [style, setStyle] = useState<React.CSSProperties>({});
-
   useEffect(() => {
     if (!open || !btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
@@ -116,13 +108,8 @@ function useYearListPosition(
       spaceBelow >= YEAR_LIST_MAX_HEIGHT + 8
         ? rect.bottom + 4
         : rect.top - Math.min(YEAR_LIST_MAX_HEIGHT, rect.top - 8) - 4;
-    setStyle({
-      top,
-      left: rect.left + rect.width / 2 - YEAR_LIST_WIDTH / 2,
-      width: YEAR_LIST_WIDTH,
-    });
+    setStyle({ top, left: rect.left + rect.width / 2 - YEAR_LIST_WIDTH / 2, width: YEAR_LIST_WIDTH });
   }, [open, btnRef]);
-
   return style;
 }
 
@@ -146,16 +133,23 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
     const [open, setOpen] = useState(false);
     const [yearOpen, setYearOpen] = useState(false);
     const [viewDate, setViewDate] = useState<Date>(() => startOfMonth(value ?? new Date()));
+    const [focusedIdx, setFocusedIdx] = useState<number>(-1);
+
     const controls = useAnimationControls();
     const yearControls = useAnimationControls();
     const triggerId = useId();
+    const gridId = useId();
     const yearBtnRef = useRef<HTMLButtonElement>(null);
     const activeYearRef = useRef<HTMLButtonElement>(null);
+    const dayRefs = useRef<Array<HTMLButtonElement | null>>([]);
+    const yearListRef = useRef<HTMLDivElement>(null);
     const yearListPosition = useYearListPosition(yearBtnRef, yearOpen);
 
     useEffect(() => {
       if (value) setViewDate(startOfMonth(value));
     }, [value]);
+
+    // ── Calendar open/close ──────────────────────────────────────────────────
 
     const closeCalendar = useCallback(async () => {
       await controls.start('closed');
@@ -163,25 +157,50 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
     }, [controls]);
 
     useEffect(() => {
-      if (open) controls.start('open');
-    }, [open, controls]);
+      if (!open) return;
+      controls.start('open');
+      // focus the selected day, today, or the first enabled day
+      const today = new Date();
+      setTimeout(() => {
+        const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth());
+        const targetIdx =
+          days.findIndex((d) => value && isSameDay(d, value)) !== -1
+            ? days.findIndex((d) => value && isSameDay(d, value))
+            : days.findIndex((d) => isSameDay(d, today) && d.getMonth() === viewDate.getMonth());
+        const idx = targetIdx >= 0 ? targetIdx : days.findIndex((d) => d.getMonth() === viewDate.getMonth());
+        setFocusedIdx(idx);
+        dayRefs.current[idx]?.focus();
+      }, 50);
+    }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Reset focus index when view month changes
+    useEffect(() => {
+      if (!open) return;
+      const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth());
+      const idx = days.findIndex((d) => d.getMonth() === viewDate.getMonth());
+      setFocusedIdx(idx);
+      setTimeout(() => dayRefs.current[idx]?.focus(), 0);
+    }, [viewDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Year list open/close ─────────────────────────────────────────────────
 
     const closeYearList = useCallback(async () => {
       await yearControls.start('closed');
       setYearOpen(false);
     }, [yearControls]);
 
-    const openYearList = useCallback(() => {
-      setYearOpen(true);
-    }, []);
+    const openYearList = useCallback(() => setYearOpen(true), []);
 
     useEffect(() => {
-      if (yearOpen) {
-        yearControls.start('open');
-        // scroll active year into view after render
-        setTimeout(() => activeYearRef.current?.scrollIntoView({ block: 'center' }), 0);
-      }
+      if (!yearOpen) return;
+      yearControls.start('open');
+      setTimeout(() => {
+        activeYearRef.current?.scrollIntoView({ block: 'center' });
+        activeYearRef.current?.focus();
+      }, 0);
     }, [yearOpen, yearControls]);
+
+    // ── Computed values ──────────────────────────────────────────────────────
 
     const days = useMemo(
       () => getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth()),
@@ -213,21 +232,136 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
       [value, locale]
     );
 
-    const handlePrevMonth = () =>
-      setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+    // ── Navigation helpers ───────────────────────────────────────────────────
 
-    const handleNextMonth = () =>
-      setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+    const goToPrevMonth = useCallback(
+      () => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1)),
+      []
+    );
 
-    const handleDayClick = (day: Date) => {
-      onChange?.(day);
-      closeCalendar();
-    };
+    const goToNextMonth = useCallback(
+      () => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1)),
+      []
+    );
 
-    const handleYearSelect = (year: number) => {
-      setViewDate(new Date(year, viewDate.getMonth(), 1));
-      closeYearList();
-    };
+    const handleDayClick = useCallback(
+      (day: Date) => {
+        onChange?.(day);
+        closeCalendar();
+      },
+      [onChange, closeCalendar]
+    );
+
+    const handleYearSelect = useCallback(
+      (year: number) => {
+        setViewDate((d) => new Date(year, d.getMonth(), 1));
+        closeYearList();
+        setTimeout(() => yearBtnRef.current?.focus(), 0);
+      },
+      [closeYearList]
+    );
+
+    // ── Keyboard: day grid ───────────────────────────────────────────────────
+
+    const handleDayKeyDown = useCallback(
+      (e: React.KeyboardEvent, idx: number) => {
+        const total = days.length;
+        let next = idx;
+
+        switch (e.key) {
+          case 'ArrowRight':
+            next = idx + 1;
+            break;
+          case 'ArrowLeft':
+            next = idx - 1;
+            break;
+          case 'ArrowDown':
+            next = idx + 7;
+            break;
+          case 'ArrowUp':
+            next = idx - 7;
+            break;
+          case 'Home':
+            next = idx - (idx % 7); // start of week
+            break;
+          case 'End':
+            next = idx - (idx % 7) + 6; // end of week
+            break;
+          case 'PageDown':
+            e.preventDefault();
+            goToNextMonth();
+            return;
+          case 'PageUp':
+            e.preventDefault();
+            goToPrevMonth();
+            return;
+          case 'Enter':
+          case ' ':
+            e.preventDefault();
+            if (!dayRefs.current[idx]?.disabled) handleDayClick(days[idx]);
+            return;
+          case 'Escape':
+            closeCalendar();
+            return;
+          case 'Tab':
+            // allow natural tab to reach nav buttons
+            return;
+          default:
+            return;
+        }
+
+        e.preventDefault();
+        next = Math.max(0, Math.min(total - 1, next));
+        setFocusedIdx(next);
+        dayRefs.current[next]?.focus();
+      },
+      [days, goToNextMonth, goToPrevMonth, handleDayClick, closeCalendar]
+    );
+
+    // ── Keyboard: year list ──────────────────────────────────────────────────
+
+    const handleYearListKeyDown = useCallback(
+      (e: React.KeyboardEvent) => {
+        const currentYear = viewDate.getFullYear();
+        const currentIdx = years.indexOf(currentYear);
+
+        switch (e.key) {
+          case 'ArrowDown': {
+            e.preventDefault();
+            const next = years[Math.min(currentIdx + 1, years.length - 1)];
+            // focus next option
+            const el = yearListRef.current?.querySelectorAll('button')[Math.min(currentIdx + 1, years.length - 1)];
+            (el as HTMLButtonElement)?.focus();
+            break;
+          }
+          case 'ArrowUp': {
+            e.preventDefault();
+            const el = yearListRef.current?.querySelectorAll('button')[Math.max(currentIdx - 1, 0)];
+            (el as HTMLButtonElement)?.focus();
+            break;
+          }
+          case 'Escape':
+            closeYearList();
+            setTimeout(() => yearBtnRef.current?.focus(), 0);
+            break;
+          case 'Tab':
+            closeYearList();
+            break;
+        }
+      },
+      [viewDate, years, closeYearList]
+    );
+
+    // ── Keyboard: calendar panel (catch-all Escape) ──────────────────────────
+
+    const handlePanelKeyDown = useCallback(
+      (e: React.KeyboardEvent) => {
+        if (e.key === 'Escape' && !yearOpen) {
+          closeCalendar();
+        }
+      },
+      [yearOpen, closeCalendar]
+    );
 
     const today = new Date();
 
@@ -267,7 +401,6 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
               <Popover.Content
                 asChild
                 onInteractOutside={(e) => {
-                  // don't close calendar when interacting with year list portal
                   if ((e.target as Element)?.closest('[data-year-list]')) return;
                   closeCalendar();
                 }}
@@ -278,6 +411,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                   aria-label="Date picker"
                   exit="closed"
                   initial="closed"
+                  onKeyDown={handlePanelKeyDown}
                   role="dialog"
                   variants={panelVariants}
                 >
@@ -292,20 +426,22 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                             )
                           : false
                       }
-                      onClick={handlePrevMonth}
+                      onClick={goToPrevMonth}
                       type="button"
                     >
                       <StrokeIcon name="CaretLeft" size={16} />
                     </NavButton>
 
                     <HeaderCenter>
-                      <MonthLabel aria-live="polite">{monthName}</MonthLabel>
+                      <MonthLabel aria-live="polite" id={`${gridId}-label`}>
+                        {monthName}
+                      </MonthLabel>
 
                       <YearButton
                         ref={yearBtnRef}
                         aria-expanded={yearOpen}
                         aria-haspopup="listbox"
-                        aria-label="Select year"
+                        aria-label={`Select year, currently ${viewDate.getFullYear()}`}
                         onClick={() => (yearOpen ? closeYearList() : openYearList())}
                         type="button"
                       >
@@ -324,7 +460,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                             )
                           : false
                       }
-                      onClick={handleNextMonth}
+                      onClick={goToNextMonth}
                       type="button"
                     >
                       <StrokeIcon name="CaretRight" size={16} />
@@ -337,7 +473,11 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                     ))}
                   </WeekdayGrid>
 
-                  <DayGrid aria-label={monthLabel} role="grid">
+                  <DayGrid
+                    aria-labelledby={`${gridId}-label`}
+                    aria-multiselectable={false}
+                    role="grid"
+                  >
                     {days.map((day, idx) => {
                       const isCurrentMonth = day.getMonth() === viewDate.getMonth();
                       const isSelected = value ? isSameDay(day, value) : false;
@@ -348,7 +488,10 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
 
                       return (
                         <DayCell
+                          key={idx}
+                          ref={(el) => { dayRefs.current[idx] = el; }}
                           aria-label={day.toLocaleDateString(locale, {
+                            weekday: 'long',
                             day: 'numeric',
                             month: 'long',
                             year: 'numeric',
@@ -359,10 +502,10 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                           isOutsideMonth={!isCurrentMonth}
                           isSelected={isSelected}
                           isToday={isToday}
-                          key={idx}
                           onClick={() => handleDayClick(day)}
+                          onKeyDown={(e) => handleDayKeyDown(e, idx)}
                           role="gridcell"
-                          tabIndex={isSelected || (!value && isToday) ? 0 : -1}
+                          tabIndex={idx === focusedIdx ? 0 : -1}
                           type="button"
                         >
                           {day.getDate()}
@@ -380,12 +523,14 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
           {yearOpen &&
             createPortal(
               <YearList
+                ref={yearListRef}
                 animate={yearControls}
+                aria-label="Select year"
                 data-year-list
                 exit="closed"
                 initial="closed"
+                onKeyDown={handleYearListKeyDown}
                 role="listbox"
-                aria-label="Select year"
                 style={yearListPosition}
                 variants={yearListVariants}
               >
@@ -393,11 +538,11 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                   const isActive = y === viewDate.getFullYear();
                   return (
                     <YearOption
+                      key={y}
+                      ref={isActive ? activeYearRef : undefined}
                       aria-selected={isActive}
                       isActive={isActive}
-                      key={y}
                       onClick={() => handleYearSelect(y)}
-                      ref={isActive ? activeYearRef : undefined}
                       role="option"
                       type="button"
                     >
