@@ -41,21 +41,43 @@ export interface DatePickerProps extends Omit<ComponentProps<'button'>, 'onChang
   onChange?: (date: Date) => void;
   placeholder?: string;
   value?: Date;
+  weekStartOverride?: 0 | 1;
 }
 
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
-function getDaysInGrid(year: number, month: number): Date[] {
+function getWeekStart(locale: string): number {
+  // 1=Monday, 7=Sunday in Intl.Locale weekInfo
+  // Returns 0 (Sun) or 1 (Mon) for use with Date.getDay()
+  try {
+    const loc = new Intl.Locale(locale) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const firstDay = loc.weekInfo?.firstDay ?? loc.getWeekInfo?.()?.firstDay ?? 7;
+    return firstDay === 7 ? 0 : firstDay; // Intl uses 7 for Sunday
+  } catch {
+    return 0; // fallback: Sunday
+  }
+}
+
+function getDaysInGrid(year: number, month: number, weekStart: number): Date[] {
   const first = new Date(year, month, 1);
   const last = new Date(year, month + 1, 0);
   const days: Date[] = [];
-  for (let i = first.getDay(); i > 0; i--) days.push(new Date(year, month, 1 - i));
+  // offset = how many days to prepend before the 1st
+  const offset = (first.getDay() - weekStart + 7) % 7;
+  for (let i = offset; i > 0; i--) days.push(new Date(year, month, 1 - i));
   for (let d = 1; d <= last.getDate(); d++) days.push(new Date(year, month, d));
   const remaining = 42 - days.length;
   for (let d = 1; d <= remaining; d++) days.push(new Date(year, month + 1, d));
   return days;
+}
+
+function getWeekdayLabels(locale: string, weekStart: number): string[] {
+  return Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(2024, 0, 7 + (weekStart + i) % 7); // Jan 7 2024 = Sunday
+    return day.toLocaleDateString(locale, { weekday: 'short' }).slice(0, 2).toUpperCase();
+  });
 }
 
 function isSameDay(a: Date, b: Date): boolean {
@@ -80,7 +102,6 @@ function isAfterDay(a: Date, b: Date): boolean {
   );
 }
 
-const WEEKDAYS_SHORT = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 const panelVariants = {
   closed: { opacity: 0, scale: 0.93, transition: { duration: 0.12, ease: 'linear' } },
@@ -126,6 +147,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
       onChange,
       placeholder = 'Select date',
       value,
+      weekStartOverride,
       ...props
     },
     ref
@@ -149,6 +171,8 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
       if (value) setViewDate(startOfMonth(value));
     }, [value]);
 
+    const weekStart: 0 | 1 = weekStartOverride !== undefined ? weekStartOverride : (getWeekStart(locale) as 0 | 1);
+
     // ── Calendar open/close ──────────────────────────────────────────────────
 
     const closeCalendar = useCallback(async () => {
@@ -162,7 +186,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
       // focus the selected day, today, or the first enabled day
       const today = new Date();
       setTimeout(() => {
-        const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth());
+        const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth(), weekStart);
         const targetIdx =
           days.findIndex((d) => value && isSameDay(d, value)) !== -1
             ? days.findIndex((d) => value && isSameDay(d, value))
@@ -176,7 +200,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
     // Reset focus index when view month changes
     useEffect(() => {
       if (!open) return;
-      const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth());
+      const days = getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth(), weekStart);
       const idx = days.findIndex((d) => d.getMonth() === viewDate.getMonth());
       setFocusedIdx(idx);
       setTimeout(() => dayRefs.current[idx]?.focus(), 0);
@@ -203,8 +227,13 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
     // ── Computed values ──────────────────────────────────────────────────────
 
     const days = useMemo(
-      () => getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth()),
-      [viewDate]
+      () => getDaysInGrid(viewDate.getFullYear(), viewDate.getMonth(), weekStart),
+      [viewDate, weekStart]
+    );
+
+    const weekdayLabels = useMemo(
+      () => getWeekdayLabels(locale, weekStart),
+      [locale, weekStart]
     );
 
     const monthLabel = useMemo(
@@ -409,6 +438,7 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                 <CalendarPanel
                   animate={controls}
                   aria-label="Date picker"
+                  dir="auto"
                   exit="closed"
                   initial="closed"
                   onKeyDown={handlePanelKeyDown}
@@ -468,8 +498,8 @@ export const DatePicker = forwardRef<HTMLButtonElement, DatePickerProps>(
                   </CalendarHeader>
 
                   <WeekdayGrid aria-hidden>
-                    {WEEKDAYS_SHORT.map((wd) => (
-                      <WeekdayLabel key={wd}>{wd}</WeekdayLabel>
+                    {weekdayLabels.map((wd, i) => (
+                      <WeekdayLabel key={i}>{wd}</WeekdayLabel>
                     ))}
                   </WeekdayGrid>
 
